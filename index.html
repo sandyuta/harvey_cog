@@ -14,6 +14,7 @@
         <link rel="stylesheet" href="css/leaflet-search.css">
         <link rel="stylesheet" href="css/leaflet.photon.css">
         <link rel="stylesheet" href="css/leaflet-measure.css">
+        <script src="https://unpkg.com/georaster"></script>
         <script src="https://unpkg.com/geoblaze"></script>
         <style>
             /* ADDED INFO-BOX STYLE */
@@ -25,7 +26,7 @@
             border-radius: 5px;
             font: 14px/1.5 Arial, Helvetica, sans-serif;
             color: #333;
-            pointer-events: none; /* Let the mouse click through it */
+            pointer-events: none;
             min-width: 150px;
         }
         html, body, #map {
@@ -493,10 +494,33 @@
             }
         });
         // --- ADDED GEOBLAZE HOVER LOGIC ---
-        // Double check this filename matches exactly what you named your COG!
         const url_to_cog = "data/Harvey_Combined_COG.tif"; 
+        let myGeoraster;
 
-        // 1. Create the UI box on the map
+        // 1. Load the COG using a robust Fetch -> ArrayBuffer method
+       fetch(url_to_cog)
+            .then(response => {
+                if (!response.ok) throw new Error("Could not find the file");
+                return response.arrayBuffer();
+            })
+            .then(arrayBuffer => parseGeoraster(arrayBuffer))
+            .then(georaster => {
+                myGeoraster = georaster;
+                console.log("COG successfully loaded!");
+                
+                // --- ADD THESE TWO LINES ---
+                console.log("TIFF Projection is:", georaster.projection);
+                console.log("TIFF Bounding Box is:", georaster.xmin, "to", georaster.xmax);
+                // ---------------------------
+
+                infoControl._div.innerHTML = 'Data loaded! Hover over map...'; 
+            })
+            .catch(error => {
+                console.error("Error loading COG:", error);
+                infoControl._div.innerHTML = 'Failed to load data. Check console (F12).'; 
+            });
+        // 2. Create the UI box on the map (Keep your existing code for this)
+        // ...
         let infoControl = L.control({position: 'topright'});
         infoControl.onAdd = function (map) {
             this._div = L.DomUtil.create('div', 'info-box');
@@ -505,18 +529,21 @@
         };
         infoControl.addTo(map);
 
-        // 2. Listen for mouse movements
-        map.on('mousemove', async function(e) {
-            let lat = e.latlng.lat;
-            let lng = e.latlng.lng;
+        // 3. Listen for mouse movements and instantly query the loaded raster
+        map.on('mousemove', function(e) {
+            if (!myGeoraster) return; // Do nothing if the COG hasn't finished loading yet
+
+            // TRANSLATE LAT/LNG (Degrees) TO EPSG:3857 (Meters)
+            let projectedCoords = L.CRS.EPSG3857.project(e.latlng);
+            let x = projectedCoords.x;
+            let y = projectedCoords.y;
 
             try {
-                // Query the COG
-                const results = await geoblaze.identify(url_to_cog, [lng, lat]);
+                // Identify values at the projected X and Y coordinates
+                const results = geoblaze.identify(myGeoraster, [x, y]);
                 
-                if (results && results !== null) {
-                    // Band 1 is Historical, Band 2 is Future
-                    // We use a quick check to handle "NoData" pixels cleanly
+                if (results && results !== null && results.length > 0) {
+                    // Filter out NoData values (assuming your valid depths are > 0)
                     let hist_val = results[0] !== null && results[0] > -9999 ? results[0].toFixed(2) + ' m' : 'No Data';
                     let fut_val = results[1] !== null && results[1] > -9999 ? results[1].toFixed(2) + ' m' : 'No Data';
                     
@@ -530,6 +557,7 @@
             }
         });
         // ----------------------------------
+        // -----------------------------------------------------
         </script>        
     </body>
 </html>
